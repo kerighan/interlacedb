@@ -1,5 +1,4 @@
-from numpy import array, dtype, frombuffer, int8, integer, uint32, str_
-
+from numpy import array, dtype, frombuffer, int8, integer, str_, uint32
 
 blob_dt = dtype([("blob", uint32)])
 
@@ -47,7 +46,7 @@ class Row:
         self.field_to_dtype = field_to_dtype
         self.fields = list(self.field_to_dtype.keys())
         self.has_blob = len(self.blob_fields) != 0
-    
+
     def _finalize(self):
         self.size = self.to_unit(self.len)
         self.at = At(self)
@@ -135,7 +134,7 @@ class Row:
             byte_index + align, size)
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
-    
+
     def _get_items(self, start, stop):
         n_items = stop - start
 
@@ -160,12 +159,12 @@ class Row:
         data = array(value, dtype=dt)
         byte_index = self.from_unit(index)
         self.write_at(byte_index + align, data)
-    
+
     def _set_rows(self, start, rows):
         byte_index = self.from_unit(start)
         data_bytes = b''.join(self.to_bytes(**row) for row in rows)
         self.write_at(byte_index, data_bytes)
-    
+
     def __delitem__(self, start):
         byte_index = self.from_unit(start)
         data_bytes = self.read_at(byte_index, 1)
@@ -199,11 +198,11 @@ class Row:
             start = key.start
             assert start is not None
             return self._set_rows(start, value)
-    
+
     def __iter__(self):
         for data in self.db.iter_dataset(self):
             yield data
-    
+
     def slice(self, start, end):
         for data in self.db.iter_dataset(self, start, end):
             yield data
@@ -231,7 +230,7 @@ class At:
         elif len(key) == 3:
             index = int(key[0] + key[1] * self.size)
             self.set((index, key[2]), value)
-    
+
     def __delitem__(self, key):
         index = key[0] + key[1] * self.size
         self.delete(index)

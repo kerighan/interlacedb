@@ -1,8 +1,9 @@
 import os
 from pickle import HIGHEST_PROTOCOL, dumps, loads
-from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
-from .dataset import Row, blob_dt
 
+from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
+
+from .dataset import Row, blob_dt
 
 
 class InterlaceDB:
@@ -68,13 +69,13 @@ class InterlaceDB:
     def n_empty_slots(self):
         fs = os.stat(self.filename).st_size
         return int((fs - self.table_start) // self.unit_size - self.index)
-    
+
     def initialize(self):
         table_start = 4
 
         # initialize header
-        if not hasattr(self, "header"):
-            self.create_header()
+        # if not hasattr(self, "header"):
+        #     self.create_header()
         self.f.seek(0)
         fields_len = frombuffer(self.f.read(4), dtype=uint32)[0]
         fields = loads(self.f.read(fields_len))
@@ -114,7 +115,7 @@ class InterlaceDB:
     def create_header(self, **fields):
         if self.file_size != 0:
             raise ValueError("Header already exists")
-        
+
         # add datastructures header requests
         for dstruct in self.dstructs.values():
             new_fields = dstruct._get_header()
@@ -134,7 +135,7 @@ class InterlaceDB:
     def create_dataset(self, row_name, **kwargs):
         assert row_name not in self.rows
 
-        row_identifier = len(self.rows) + 2
+        row_identifier = len(self.rows) + 3
         dtypes = []
         for key, dt in kwargs.items():
             if not isinstance(dt, str) or dt != "blob":
@@ -147,7 +148,7 @@ class InterlaceDB:
         self._id2size[row_identifier] = row.len
         self._id2row[row_identifier] = row
         return row
-    
+
     def create_datastructure(self, name, struct):
         assert name not in self.rows
         self.dstructs[name] = struct
@@ -182,13 +183,13 @@ class InterlaceDB:
         # finalize rows (add ``at method)
         for row in self.rows.values():
             row._finalize()
-        # finalize 
+        # finalize
         for dstruct in self.dstructs:
             dstruct._finalize()
 
     def __enter__(self):
         return self
-    
+
     def __exit__(self, *_):
         self.build()
 
@@ -247,7 +248,7 @@ class InterlaceDB:
         start = self.index
         self.index += size
         return start, self.index
-    
+
     def read_slice(self, start, stop):
         start = self.from_unit(start)
         stop = self.from_unit(stop)
@@ -258,7 +259,7 @@ class InterlaceDB:
             return self.rows[name]
         except KeyError:
             return self.dstructs[name]
-    
+
     def __iter__(self):
         _skip_through = self._skip_through
         index = self.table_start
@@ -297,7 +298,7 @@ class InterlaceDB:
             yield data
 
             index += upper_size
-    
+
     def iter_dataset(self, row, start=None, end=None):
         _skip_through = self._skip_through
         if isinstance(row, Row):
@@ -320,7 +321,8 @@ class InterlaceDB:
                 return
             identifier = frombuffer(self.read_at(index, 1), dtype="int8")[0]
             if identifier == 0:
-                arr = frombuffer(self.read_at(index, _skip_through), dtype="int8")
+                arr = frombuffer(self.read_at(
+                    index, _skip_through), dtype="int8")
                 non_zeros = where(arr != 0)[0]
                 if len(non_zeros) == 0:
                     index += _skip_through
@@ -342,7 +344,7 @@ class InterlaceDB:
             if identifier != target:
                 index += upper_size
                 continue
-            
+
             data = row._parse(self.read_at(index + 1, size - 1))
             yield data
 
