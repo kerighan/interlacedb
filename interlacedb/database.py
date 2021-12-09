@@ -2,9 +2,9 @@ import os
 from pickle import HIGHEST_PROTOCOL, dumps, loads
 
 from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
-from .exception import HeaderExistsError, DatasetExistsError
-from .dataset import Dataset, blob_dt
 
+from .dataset import Dataset, blob_dt
+from .exception import DatasetExistsError, HeaderExistsError
 
 STEP_SIZE = 10000
 
@@ -40,8 +40,6 @@ class InterlaceDB:
         # index of read/write head
         self._index = None
 
-        # self._adapt_byte_size = adapt_byte_size
-
         # if not os.path.exists(filename) or self.file_size == 0:
         #     self.f = open(filename, "wb+")
         # else:
@@ -53,7 +51,7 @@ class InterlaceDB:
 
         # open file
         self.open()
-        
+
     def open(self):
         # create new file if needed, else open in rb+ mode
         if self._is_new_database():
@@ -75,11 +73,6 @@ class InterlaceDB:
             self.encode = orjson.dumps
             self.decode = orjson.loads
 
-    # @property
-    # def n_empty_slots(self):
-    #     fs = os.stat(self.filename).st_size
-    #     return int((fs - self.table_start) // self.unit_size - self.index)
-
     # =========================================================================
     # properties
     # =========================================================================
@@ -95,7 +88,7 @@ class InterlaceDB:
     @property
     def index(self):
         if self._index is None:
-            res = self.header._get_field("_index")
+            res = self.header._get_field_no_index("_index")
             self._index = res
             return res
         return self._index
@@ -103,21 +96,18 @@ class InterlaceDB:
     @index.setter
     def index(self, value):
         value = int(value)
-        self.header._set_field("_index", value)
+        self.header._set_field_no_index("_index", value)
         self._index = value
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self._dump()
-        self.close()
-        self.open()
+    @property
+    def _n_empty_slots(self):
+        fs = os.stat(self.filename).st_size
+        return fs - self.index
 
     # def initialize(self):
     #     table_start = 4
 
-    #     # initialize header 
+    #     # initialize header
     #     self.f.seek(0)
     #     fields_len = frombuffer(self.f.read(4), dtype=uint32)[0]
     #     fields = loads(self.f.read(fields_len))
@@ -164,7 +154,7 @@ class InterlaceDB:
         data_bytes = dumps({"header": self.header, "datasets": self.datasets},
                            protocol=HIGHEST_PROTOCOL)
         data_len_bytes = array(len(data_bytes), dtype=uint32).tobytes()
-        pickle_bytes= data_len_bytes + data_bytes
+        pickle_bytes = data_len_bytes + data_bytes
         pickle_bytes_len = len(pickle_bytes)
 
         # extend file and write on file
@@ -227,15 +217,38 @@ class InterlaceDB:
             self._header_fields[field] = dtype(dt)
 
     # =========================================================================
+    # overloading methods
+    # =========================================================================
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self._dump()
+        self.close()
+        self.open()
+
+    # =========================================================================
     # data manipulation methods
     # =========================================================================
 
-    def allocate(self, bytes_size):
+    def _allocate(self, bytes_size):
         # returns start and end indices of allocated data
         self._extend_file(bytes_size)
         start = self.index
-        self.index += size
-        return start, self.index
+        self.index += bytes_size
+        return start
+
+    def _append(self, data_bytes):
+        data_size = len(data_bytes)
+        # if there's no place left in the file, truncate
+        if self._n_empty_slots < data_size:
+            self._extend_file(max(STEP_SIZE, data_size))
+
+        index = self.index
+        self._write_at(index, data_bytes)
+        self.index += data_size
+        return index
 
     # =========================================================================
     # file IO management methods
@@ -254,7 +267,7 @@ class InterlaceDB:
     def _read_at(self, start, size):
         self.f.seek(start)
         return self.f.read(size)
-    
+
     def close(self):
         self.f.close()
 
@@ -334,17 +347,6 @@ class InterlaceDB:
     #     byte_index = self.from_unit(index)
     #     self.write_at(byte_index, data)
 
-    # def append(self, data_bytes):
-    #     data_size = self.to_unit(len(data_bytes))
-    #     if self.n_empty_slots < data_size:
-    #         alloc_size = int(self.allocation_size * self.unit_size)
-    #         self._extend_file(max(alloc_size, data_size))
-
-    #     index = self.index
-    #     self.put(index, data_bytes)
-    #     self.index += data_size
-    #     return index
-
     # def append_blob(self, blob):
     #     blob_bytes = self.encode(blob)
     #     blob_size = len(blob_bytes)
@@ -366,7 +368,6 @@ class InterlaceDB:
 
     # def from_unit(self, index):
     #     return int(index * self.unit_size + self.table_start)
-
 
     # def read_slice(self, start, stop):
     #     start = self.from_unit(start)

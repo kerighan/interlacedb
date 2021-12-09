@@ -24,10 +24,10 @@ class DataFrame:
     def write_dataframe(self, df):
         from tqdm import tqdm
         self.header["len"] = len(df)
-        _, _ = self.data.allocate(len(df))
+        block_id = self.data.new_block(len(df))
         i = 0
         for _, row in tqdm(df.iterrows(), total=len(df)):
-            self.data.at[0, i] = {"value": dict(row)}
+            self.data[block_id, i] = {"value": dict(row)}
             i += 1
 
     def get_row(self, index):

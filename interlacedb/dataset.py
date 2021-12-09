@@ -1,6 +1,5 @@
 from numpy import array, dtype, frombuffer, int8, integer, str_, uint32
 
-
 blob_dt = dtype([("blob", uint32)])
 PREFIX_DTYPE = int8
 
@@ -19,7 +18,8 @@ class Dataset:
         self._db = db
         self._read_at = db._read_at
         self._write_at = db._write_at
-        # self._db_append = db.append
+        self._db_append = db._append
+        self._db_allocate = db._allocate
         # self._db_append_blob = db.append_blob
         # self._db_get_blob = db.get_blob
 
@@ -29,7 +29,8 @@ class Dataset:
         del self._db
         del self._read_at
         del self._write_at
-        # del self._db_append
+        del self._db_append
+        del self._db_allocate
         # del self._db_append_blob
         # del self._db_get_blob
 
@@ -37,23 +38,10 @@ class Dataset:
         self._db = db
         self._read_at = db._read_at
         self._write_at = db._write_at
-        # self._db_append = db.append
+        self._db_append = db._append
+        self._db_allocate = db._allocate
         # self._db_append_blob = db.append_blob
         # self._db_get_blob = db.get_blob
-
-    # =========================================================================
-    # overloading functions
-    # =========================================================================
-
-    def __repr__(self):
-        txt = []
-        for key, dt in self._dtypes:
-            txt.append(f"{key}={dt}")
-        txt = ", ".join(txt)
-        return self.name.capitalize() + "(" + txt + ")"
-
-    def __len__(self):
-        return self._len
 
     def _compile(self):
         self._blob_fields = set()
@@ -74,24 +62,127 @@ class Dataset:
         self._has_blob = len(self._blob_fields) != 0
 
     # =========================================================================
+    # encoding and decoding functions
+    # =========================================================================
+
+    def _to_numpy(self, data):
+        for f in self._string_fields:
+            if f not in data:
+                data[f] = ""
+        if self._has_blob:
+            for f in self._blob_fields:
+                if f not in data:
+                    data[f] = 0
+                    continue
+        res = tuple(data.get(key, 0) for key in self._field)
+        return array(res, dtype=self._dtypes)
+
+    def _to_bytes(self, data):
+        if self._has_blob:
+            # self.parse_blob(data)
+            pass
+        arr = self._to_numpy(data)
+        return self._prefix + arr.tobytes()
+
+    def _parse(self, res):
+        res = frombuffer(res, dtype=self._dtypes)[0]
+        if not self._has_blob:
+            return dict(zip(self._field, res))
+
+        res = dict(zip(self._field, res))
+        for field in self._blob_fields:
+            blob_id = res[field][0]
+            if blob_id == 0:
+                del res[field]
+                continue
+            # res[field] = self._db_get_blob(blob_id)
+        return res
+
+    # =========================================================================
+    # overloading functions
+    # =========================================================================
+
+    def __repr__(self):
+        txt = []
+        for key, dt in self._dtypes:
+            txt.append(f"{key}={dt}")
+        txt = ", ".join(txt)
+        return self.name.capitalize() + "(" + txt + ")"
+
+    def __len__(self):
+        return self._len
+
+    # =========================================================================
     # setters and getters
     # =========================================================================
 
-    def _set_item(self, byte_index, key, value):
-        _, align, dt = self._field[key]
-        data = array(value, dtype=dt)
-        self._write_at(byte_index + align, data)
-
-    def _set_field(self, key, value):
+    def _set_field_no_index(self, key, value):
         _, align, dt = self._field[key]
         data = array(value, dtype=dt)
         self._write_at(self._offset + align, data)
 
-    def _get_field(self, key):
+    def _get_field_no_index(self, key):
         dt_size, align, dt = self._field[key]
         data_bytes = self._read_at(self._offset + align, dt_size)
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
+
+    # def _set_item(self, byte_index, key, value):
+    #     _, align, dt = self._field[key]
+    #     data = array(value, dtype=dt)
+    #     self._write_at(byte_index + align, data)
+
+    def _get_index_from(self, block_index, row_index):
+        return block_index + row_index * self._len
+
+    def new_block(self, size):
+        return self._db_allocate(self._len * size)
+
+    def append(self, **data):
+        return self._db_append(self._to_bytes(data))
+
+    def get(self, block_index, row_index=0):
+        index = self._get_index_from(block_index, row_index)
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier != self._identifier:
+            raise KeyError
+        data_bytes = self._read_at(index + self._prefix_size,
+                                   self._len - self._prefix_size)
+        return self._parse(data_bytes)
+
+    def get_value(self, block_index, row_index, key):
+        dt_size, align, dt = self._field[key]
+        index = self._get_index_from(block_index, row_index) + align
+        data_bytes = self._read_at(index, dt_size)
+        res = frombuffer(data_bytes, dtype=dt)[0]
+        return res
+
+    def set(self, block_index, row_index, data):
+        data_bytes = self._to_bytes(data)
+        index = self._get_index_from(block_index, row_index)
+        self._write_at(index, data_bytes)
+
+    def set_value(self, block_index, row_index, key, value):
+        _, align, dt = self._field[key]
+        index = self._get_index_from(block_index, row_index) + align
+
+        data = array(value, dtype=dt).tobytes()
+        self._write_at(index, data)
+
+    def __getitem__(self, args):
+        arg_len = len(args)
+        if arg_len == 2:
+            return self.get(*args)
+        elif arg_len == 3:
+            return self.get_value(*args)
+
+    def __setitem__(self, args, value):
+        arg_len = len(args)
+        if arg_len == 2:
+            return self.set(*args, value)
+        elif arg_len == 3:
+            return self.set_value(*args, value)
 
     # def _build(self):
     #     field_to_dtype = {}
@@ -120,51 +211,11 @@ class Dataset:
     #     self.size = self.to_unit(self.len)
     #     self.at = At(self)
 
-    # def encode(self, **data):
-    #     for f in self.string_fields:
-    #         if f not in data:
-    #             data[f] = ""
-    #     if self.has_blob:
-    #         for f in self.blob_fields:
-    #             if f not in data:
-    #                 data[f] = 0
-    #                 continue
-    #             data[f]
-    #     res = tuple(data.get(key, 0) for key in self.fields)
-    #     return array(res, dtype=self.dtypes)
-
-    # def to_bytes(self, **data):
-    #     if self.has_blob:
-    #         self.parse_blob(data)
-    #     arr = self.encode(**data)
-    #     return self.prefix + arr.tobytes()
-
-    # def allocate(self, size):
-    #     row_size = self.to_unit(self.len)
-    #     return self.db.allocate(row_size * size)
-
-    # def append(self, **data):
-    #     return self.db_append(self.to_bytes(**data))
-
     # def parse_blob(self, data):
     #     for field in self.blob_fields:
     #         if field not in data:
     #             continue
     #         data[field] = self.db_append_blob(data[field])
-
-    # def _parse(self, res):
-    #     res = frombuffer(res, dtype=self.dtypes)[0]
-    #     if not self.has_blob:
-    #         return dict(zip(self.fields, res))
-
-    #     res = dict(zip(self.fields, res))
-    #     for field in self.blob_fields:
-    #         blob_id = res[field][0]
-    #         if blob_id == 0:
-    #             del res[field]
-    #             continue
-    #         res[field] = self.db_get_blob(blob_id)
-    #     return res
 
     # def _get_item_inplace(self, field):
     #     size, align, dt = self.size_align_dtype[field]
