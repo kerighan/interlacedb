@@ -171,18 +171,23 @@ class Dataset:
         self._write_at(index, data)
 
     def __getitem__(self, args):
-        arg_len = len(args)
-        if arg_len == 2:
-            return self.get(*args)
-        elif arg_len == 3:
-            return self.get_value(*args)
+        if isinstance(args, tuple):
+            arg_len = len(args)
+            if arg_len == 2:
+                return self.get(*args)
+            elif arg_len == 3:
+                return self.get_value(*args)
+        return self._get_field_no_index(args)
 
     def __setitem__(self, args, value):
-        arg_len = len(args)
-        if arg_len == 2:
-            return self.set(*args, value)
-        elif arg_len == 3:
-            return self.set_value(*args, value)
+        if isinstance(args, tuple):
+            arg_len = len(args)
+            if arg_len == 2:
+                return self.set(*args, value)
+            elif arg_len == 3:
+                return self.set_value(*args, value)
+        return self._set_field_no_index(args, value)
+
 
     # def _build(self):
     #     field_to_dtype = {}
