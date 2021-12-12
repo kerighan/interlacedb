@@ -32,7 +32,7 @@ class InterlaceDB:
         self.datastructures = {}
 
         # internal list of header fields
-        self._header_fields = {}
+        self._header_fields = {"_index": dtype("uint64")}
 
         self._id2size = {}
         self._id2dataset = {}
@@ -40,16 +40,9 @@ class InterlaceDB:
         # index of read/write head
         self._index = None
 
-        # if not os.path.exists(filename) or self.file_size == 0:
-        #     self.f = open(filename, "wb+")
-        # else:
-        #     self.f = open(filename, "rb+")
-        #     self.initialize()
-
+        # open file
         if flag == "n" and os.path.exists(filename):
             os.remove(filename)
-
-        # open file
         self.open()
 
     def open(self):
@@ -104,54 +97,47 @@ class InterlaceDB:
         fs = os.stat(self.filename).st_size
         return fs - self.index
 
-    # def initialize(self):
-    #     table_start = 4
-
-    #     # initialize header
-    #     self.f.seek(0)
-    #     fields_len = frombuffer(self.f.read(4), dtype=uint32)[0]
-    #     fields = loads(self.f.read(fields_len))
-    #     self.build_header(fields)
-    #     table_start += fields_len
-
-    #     # initialize rows
-    #     rows_len = frombuffer(self.f.read(4), dtype=uint32)[0]
-    #     rows = loads(self.f.read(rows_len))
-    #     for i, (row_name, dtypes) in enumerate(rows, 3):
-    #         row = Row(i, self, row_name, dtypes)
-    #         self.rows[row_name] = row
-    #         self._id2size[i] = row.len
-    #         self._id2row[i] = row
-    #     table_start += rows_len + 4
-
-    #     if self._adapt_byte_size or len(self.rows) == 1:
-    #         self.unit_size = min(len(r) for r in self.rows.values())
-    #     else:
-    #         self.unit_size = 1
-
-    #     self.pickle_size = table_start
-    #     self.table_start = table_start + len(self.header)
-    #     self.header.offset = self.pickle_size
-    #     # finalize rows (add ``at method)
-    #     for row in self.rows.values():
-    #         row._finalize()
-
     # =========================================================================
     # datasets and header management
     # =========================================================================
 
+    def _initialize(self):
+        for datastructure in self.datastructures.values():
+            datastructure._initialize()
+
+    def _remove_database_reference(self):
+        self.header._remove_database_reference()
+        for name in self.datasets:
+            self.datasets[name]._remove_database_reference()
+    
+    def _add_database_reference(self):
+        self.header._add_database_reference(self)
+        for dataset in self.datasets.values():
+            dataset._add_database_reference(self)
+        for datastructure in self.datastructures.values():
+            datastructure._add_database_reference(self)
+    
+    def _add_header_from_datastructures(self):
+        for dstruct in self.datastructures.values():
+            fields = dstruct._get_header_fields()
+            for field, dt in fields.items():
+                self._header_fields[field] = dtype(dt)
+
     def _dump(self):
+        # complete headers instructions from other datastructures
+        self._add_header_from_datastructures()
+
         # build header
         self.header = Dataset(1, self, "header",
                               list(self._header_fields.items()))
 
         # remove database reference in datasets for pickle
-        self.header._remove_database_reference()
-        for name in self.datasets:
-            self.datasets[name]._remove_database_reference()
+        self._remove_database_reference()
 
         # dump header and datasets data
-        data_bytes = dumps({"header": self.header, "datasets": self.datasets},
+        data_bytes = dumps({"header": self.header,
+                            "datasets": self.datasets,
+                            "datastructures": self.datastructures},
                            protocol=HIGHEST_PROTOCOL)
         data_len_bytes = array(len(data_bytes), dtype=uint32).tobytes()
         pickle_bytes = data_len_bytes + data_bytes
@@ -162,9 +148,7 @@ class InterlaceDB:
         self._write_at(0, pickle_bytes)
 
         # bring back database reference in datasets
-        self.header._add_database_reference(self)
-        for name in self.datasets:
-            self.datasets[name]._add_database_reference(self)
+        self._add_database_reference()
 
         # initialize heads
         self._extend_file(len(self.header))
@@ -176,17 +160,24 @@ class InterlaceDB:
         self.f.seek(0)
         data_len = frombuffer(self.f.read(4), dtype=uint32)[0]
         data = loads(self.f.read(data_len))
-        self.header = data["header"]
-        self.datasets = data["datasets"]
+        # grab values if not already done
+        if self.header is None:
+            self.header = data["header"]
+        if len(self.datasets) == 0:
+            self.datasets = data["datasets"]
+        if len(self.datastructures) == 0:
+            self.datastructures = data["datastructures"]
 
         # bring back database reference in datasets
-        self.header._add_database_reference(self)
-        for name in self.datasets:
-            self.datasets[name]._add_database_reference(self)
+        self._add_database_reference()
 
         # initialize heads
         self.header._offset = data_len + 4
         self.table_start = self.header._offset + len(self.header)
+
+        # initialize datastructures
+        for dstruct in self.datastructures.values():
+            dstruct._initialize()
 
     def create_dataset(self, name, **kwargs):
         if name in self.datasets:
@@ -215,6 +206,10 @@ class InterlaceDB:
 
         for field, dt in fields.items():
             self._header_fields[field] = dtype(dt)
+    
+    def create_datastructure(self, name, dstruct):
+        self.datastructures[name] = dstruct
+        return dstruct
 
     # =========================================================================
     # overloading methods
@@ -270,6 +265,9 @@ class InterlaceDB:
 
     def close(self):
         self.f.close()
+
+    def __del__(self):
+        self.close()
 
         # fields_bytes = dumps(fields, protocol=HIGHEST_PROTOCOL)
         # fields_len = array(len(fields_bytes), dtype=uint32).tobytes()

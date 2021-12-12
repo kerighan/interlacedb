@@ -1,39 +1,50 @@
 from interlacedb import InterlaceDB
-from interlacedb.datastructure import HashTable, HashTree
+from interlacedb.datastructure import LayeredHashTable
+from sqlitedict import SqliteDict
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
 import random
 import os
 
-if os.path.exists("test.db"):
-    os.remove("test.db")
+N = 100000
+with InterlaceDB("test.db", flag="n") as db:
+    node = db.create_dataset("node", key="U20", value="uint64")
+    node_htable = LayeredHashTable(
+        node, key="key",
+        p_init=10, branching_factor=2, probe_factor=.25)
+    db.create_datastructure("node_htable", node_htable)
 
-with InterlaceDB("test.db") as db:
-    node = db.create_dataset("node", value="int")
-    edge = db.create_dataset("edge", source="int", target="int")
-
-    htable_node = db.create_datastructure(HashTree(node))
-    htable_edge = db.create_datastructure(HashTree(edge))
-
-
-N = 2**16
-edges = []
 for i in tqdm(range(N)):
-    key = f"key_{i}"
-    htable_node.insert(key, {"value": i})
+    node_htable.insert({"key": f"test_{i}", "value": i})
 
-    u = random.randint(0, N-1)
-    v = random.randint(0, N-1)
-    key = f"{u}_{v}"
-    htable_edge.insert(key, {"source": u, "target": v})
-    edges.append((u, v))
+# print(node_htable.lookup("test_0"))
+# print(node_htable.lookup(f"test_9999"))
+# del db
+
+# db = InterlaceDB("test.db")
+# node_htable = db.datastructures["node_htable"]
+# print(node_htable.tables_id)
+for i in tqdm(range(N)):
+    try:
+        node_htable.lookup(f"test_{i}")
+    except ValueError:
+        print(i)
+        raise ValueError
 
 
-keys = [f"key_{i}" for i in range(N)]
-for key in tqdm(keys, desc="get node"):
-    htable_node.lookup(key)
+# db = SqliteDict("test.sqlite", autocommit=True)
+# for i in tqdm(range(N)):
+#     db[f"test_{i}"] = i
+# for i in tqdm(range(N)):
+#     db[f"test_{i}"]
 
-for u, v in tqdm(edges, desc="get edge"):
-    key = f"{u}_{v}"
-    htable_edge.lookup(key)
+
+# node_htable.insert({"key": "test", "value": 55})
+# print(node_htable.lookup("test"))
+
+
+# print(node_htable.p_last)
+
+# print(node_htable.tables_id)
+# print(db.header["node_LHT_tables_id"])

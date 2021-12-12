@@ -127,13 +127,8 @@ class Dataset:
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
 
-    # def _set_item(self, byte_index, key, value):
-    #     _, align, dt = self._field[key]
-    #     data = array(value, dtype=dt)
-    #     self._write_at(byte_index + align, data)
-
     def _get_index_from(self, block_index, row_index):
-        return block_index + row_index * self._len
+        return int(block_index + row_index * self._len)
 
     def new_block(self, size):
         return self._db_allocate(self._len * size)
@@ -169,6 +164,14 @@ class Dataset:
 
         data = array(value, dtype=dt).tobytes()
         self._write_at(index, data)
+    
+    def exists(self, block_index, row_index):
+        index = self._get_index_from(block_index, row_index)
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier != self._identifier:
+            return False
+        return True
 
     def __getitem__(self, args):
         if isinstance(args, tuple):
