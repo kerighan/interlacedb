@@ -1,4 +1,5 @@
-from numpy import array, dtype, frombuffer, int8, integer, str_, uint32
+from numpy import array, dtype, frombuffer, int8, str_, uint32
+from numpy.lib.arraysetops import isin
 
 blob_dt = dtype([("blob", uint32)])
 PREFIX_DTYPE = int8
@@ -164,7 +165,7 @@ class Dataset:
 
         data = array(value, dtype=dt).tobytes()
         self._write_at(index, data)
-    
+
     def exists(self, block_index, row_index):
         index = self._get_index_from(block_index, row_index)
         data_bytes = self._read_at(index, 1)
@@ -190,7 +191,6 @@ class Dataset:
             elif arg_len == 3:
                 return self.set_value(*args, value)
         return self._set_field_no_index(args, value)
-
 
     # def _build(self):
     #     field_to_dtype = {}
@@ -326,29 +326,120 @@ class Dataset:
     #         yield data
 
 
-class At:
-    def __init__(self, row):
-        self.set = row.__setitem__
-        self.get = row.__getitem__
-        self.delete = row.__delitem__
-        self.size = row.size
+class Group(Dataset):
+    def __init__(self, identifier, dataset, name, dtypes):
+        self.name = name
+        self._identifier = identifier
+        self._dtypes = dtypes
+        self._len = 0
+        self._prefix = PREFIX_DTYPE(identifier).tobytes()
+        self._prefix_size = len(self._prefix)
+        self._compile()
 
-    def __getitem__(self, key):
-        if len(key) == 2:
-            index = int(key[0] + key[1] * self.size)
-            return self.get(index)
-        elif len(key) == 3:
-            index = int(key[0] + key[1] * self.size)
-            return self.get((index, key[2]))
+        # dataset methods
+        self._dataset = dataset
+        self._dataset_len = len(dataset)
+        self._dataset_to_bytes = dataset._to_bytes
+        self._dataset_parse = dataset._parse
+        self._dataset_identifier = dataset._identifier
+        self._dataset_field = dataset._field
+        self._dataset_get_index_from = dataset._get_index_from
+        # db methods
+        self._db_allocate = dataset._db._allocate
+        self._write_at = dataset._db._write_at
+        self._read_at = dataset._db._read_at
 
-    def __setitem__(self, key, value):
-        if len(key) == 2:
-            index = int(key[0] + key[1] * self.size)
-            self.set(index, value)
-        elif len(key) == 3:
-            index = int(key[0] + key[1] * self.size)
-            self.set((index, key[2]), value)
+    def _remove_database_reference(self):
+        del self._db_allocate
+        del self._write_at
+        del self._read_at
 
-    def __delitem__(self, key):
-        index = key[0] + key[1] * self.size
-        self.delete(index)
+    def _add_database_reference(self, db):
+        self._db_allocate = db._allocate
+        self._write_at = db._write_at
+        self._read_at = db._read_at
+
+    def new_block(self, size):
+        block_id = self._db_allocate(self._len + self._dataset_len * size)
+        self._write_at(block_id, self._prefix)
+        return block_id
+
+    def set_value(self, block_index, key, value):
+        _, align, dt = self._field[key]
+        index = block_index + align
+
+        data = array(value, dtype=dt).tobytes()
+        self._write_at(index, data)
+
+    def get_value(self, block_index, key):
+        dt_size, align, dt = self._field[key]
+        index = block_index + align
+        data_bytes = self._read_at(index, dt_size)
+        res = frombuffer(data_bytes, dtype=dt)[0]
+        return res
+
+    def set_data(self, block_index, row_index, data):
+        data_bytes = self._dataset_to_bytes(data)
+        index = self._dataset_get_index_from(
+            block_index, row_index) + self._len
+        self._write_at(index, data_bytes)
+
+    def set_data_value(self, block_index, row_index, key, value):
+        _, align, dt = self._dataset_field[key]
+        index = self._dataset_get_index_from(block_index,
+                                             row_index) + align + self._len
+        data = array(value, dtype=dt).tobytes()
+        self._write_at(index, data)
+
+    def get_data(self, block_index, row_index):
+        index = self._dataset_get_index_from(
+            block_index, row_index) + self._len
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier != self._dataset_identifier:
+            raise KeyError
+        data_bytes = self._read_at(index + self._prefix_size,
+                                   self._dataset_len - self._prefix_size)
+        return self._dataset_parse(data_bytes)
+
+    def get_data_value(self, block_index, row_index, key):
+        dt_size, align, dt = self._dataset_field[key]
+        index = block_index + align + self._len
+        data_bytes = self._read_at(index, dt_size)
+        res = frombuffer(data_bytes, dtype=dt)[0]
+        return res
+
+    def get(self, index):
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier != self._identifier:
+            raise KeyError
+        data_bytes = self._read_at(index + self._prefix_size,
+                                   self._len - self._prefix_size)
+        return self._parse(data_bytes)
+
+    def __getitem__(self, args):
+        if isinstance(args, tuple):
+            arg_len = len(args)
+            if arg_len == 2:
+                block_index, item_1 = args
+                if isinstance(item_1, int):
+                    return self.get_data(block_index, item_1)
+                elif isinstance(item_1, str):
+                    return self.get_value(block_index, item_1)
+            elif arg_len == 3:
+                return self.get_data_value(*args)
+        else:
+            return self.get(args)
+
+    def __setitem__(self, args, value):
+        if isinstance(args, tuple):
+            arg_len = len(args)
+            if arg_len == 2:
+                block_index, item_1 = args
+                if isinstance(item_1, int):
+                    return self.set_data(block_index, item_1, value)
+                elif isinstance(item_1, str):
+                    return self.set_value(block_index, item_1, value)
+            elif arg_len == 3:
+                return self.set_data_value(*args, value)

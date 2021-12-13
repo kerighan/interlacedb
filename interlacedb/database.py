@@ -3,7 +3,7 @@ from pickle import HIGHEST_PROTOCOL, dumps, loads
 
 from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
 
-from .dataset import Dataset, blob_dt
+from .dataset import Dataset, Group, blob_dt
 from .exception import DatasetExistsError, HeaderExistsError
 
 STEP_SIZE = 10000
@@ -109,14 +109,14 @@ class InterlaceDB:
         self.header._remove_database_reference()
         for name in self.datasets:
             self.datasets[name]._remove_database_reference()
-    
+
     def _add_database_reference(self):
         self.header._add_database_reference(self)
         for dataset in self.datasets.values():
             dataset._add_database_reference(self)
         for datastructure in self.datastructures.values():
             datastructure._add_database_reference(self)
-    
+
     def _add_header_from_datastructures(self):
         for dstruct in self.datastructures.values():
             fields = dstruct._get_header_fields()
@@ -197,6 +197,24 @@ class InterlaceDB:
         self._id2dataset[identifier] = dset
         return dset
 
+    def create_group(self, name, dataset, **kwargs):
+        if name in self.datasets:
+            raise DatasetExistsError("A dataset named '{name}' already exists")
+
+        identifier = len(self.datasets) + 3
+        dtypes = []
+        for key, dt in kwargs.items():
+            if not isinstance(dt, str) or dt != "blob":
+                dtypes.append((key, dtype(dt)))
+            else:
+                dtypes.append((key, blob_dt))
+
+        dset = Group(identifier, dataset, name, dtypes)
+        self.datasets[name] = dset
+        self._id2size[identifier] = len(dset)
+        self._id2dataset[identifier] = dset
+        return dset
+
     def create_header(self, **fields):
         if self.file_size != 0:
             raise HeaderExistsError("Header already exists")
@@ -206,7 +224,7 @@ class InterlaceDB:
 
         for field, dt in fields.items():
             self._header_fields[field] = dtype(dt)
-    
+
     def create_datastructure(self, name, dstruct):
         self.datastructures[name] = dstruct
         return dstruct

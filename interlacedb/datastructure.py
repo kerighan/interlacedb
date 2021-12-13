@@ -12,7 +12,7 @@ class LayeredHashTable:
         self.dataset = dataset
         self.dstruct_name = f"{dataset.name}_LHT"
         self.tables_id_key = f"{self.dstruct_name}_tables_id"
-    
+
     def _get_header_fields(self):
         return {
             f"{self.tables_id_key}_{i}": "uint64"
@@ -44,7 +44,7 @@ class LayeredHashTable:
 
     def _add_database_reference(self, db):
         self._db = db
-    
+
     def _hash(self, key):
         if not isinstance(key, str):
             key = str(key)
@@ -52,10 +52,10 @@ class LayeredHashTable:
 
     def _get_range(self, p):
         return range(int(round(p * self.probe_factor * self.branching_factor)))
-    
+
     def _get_capacity(self, p):
         return self.branching_factor**p
-    
+
     def _create_new_hashtable(self):
         self.p_last += 1
         capacity = self._get_capacity(self.p_last)
@@ -63,7 +63,7 @@ class LayeredHashTable:
         index = self.p_last - self.p_init
         self.tables_id[index] = table_id
         self._save_tables_id(index)
-    
+
     def insert(self, data):
         key = data[self.key]
         key_hash = self._hash(key)
@@ -80,7 +80,7 @@ class LayeredHashTable:
                 return p, position
             except KeyError:
                 pass
-        
+
         self._create_new_hashtable()
         p, position = self.find_insert_position_in_table(
             key, key_hash, self.p_last)
@@ -110,16 +110,17 @@ class LayeredHashTable:
         p, position = self.find_lookup_position(key, key_hash)
         table_id = self.tables_id[p - self.p_init]
         return self.dataset.get(table_id, position)
-    
+
     def find_lookup_position(self, key, key_hash):
         for p in range(self.p_last, self.p_init - 1, -1):
             try:
-                p, position = self.find_lookup_position_in_table(key, key_hash, p)
+                p, position = self.find_lookup_position_in_table(
+                    key, key_hash, p)
                 return p, position
             except KeyError:
                 pass
         raise ValueError
-    
+
     def find_lookup_position_in_table(self, key, key_hash, p):
         exists = self.dataset.exists
         get_value = self.dataset.get_value
