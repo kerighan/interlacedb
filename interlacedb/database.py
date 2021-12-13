@@ -3,7 +3,7 @@ from pickle import HIGHEST_PROTOCOL, dumps, loads
 
 from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
 
-from .dataset import Dataset, Group, blob_dt
+from .dataset import Array, Dataset, Group, blob_dt
 from .exception import DatasetExistsError, HeaderExistsError
 
 STEP_SIZE = 10000
@@ -16,6 +16,7 @@ class InterlaceDB:
         self,
         filename,
         blob_protocol="pickle",
+        blob_zip=False,
         flag="w"
     ):
         """
@@ -24,7 +25,7 @@ class InterlaceDB:
         (str) blob_protocol: protocol defining encoding and decoding functions
         """
         self.filename = filename
-        self._get_encoder_and_decoder(blob_protocol)
+        self._get_encoder_and_decoder(blob_protocol, blob_zip)
 
         # references to header, datasets and datastructures
         self.header = None
@@ -39,6 +40,7 @@ class InterlaceDB:
 
         # index of read/write head
         self._index = None
+        self._blob_identifier = int8(1).tobytes()
 
         # open file
         if flag == "n" and os.path.exists(filename):
@@ -53,18 +55,35 @@ class InterlaceDB:
             self.f = open(self.filename, "rb+")
             self._load()
 
-    def _get_encoder_and_decoder(self, blob_protocol):
-        if blob_protocol == "pickle":
-            self.encode = lambda x: dumps(x, protocol=HIGHEST_PROTOCOL)
-            self.decode = loads
-        elif blob_protocol == "ujson":
-            import ujson
-            self.encode = lambda x: bytes(ujson.dumps(x), "utf8")
-            self.decode = lambda x: ujson.loads(str(x, "utf8"))
-        elif blob_protocol == "orjson":
-            import orjson
-            self.encode = orjson.dumps
-            self.decode = orjson.loads
+    def _get_encoder_and_decoder(self, blob_protocol, blob_zip):
+        if blob_zip:
+            from zlib import compress, decompress
+            if blob_protocol == "pickle":
+                self.encode = lambda x: compress(dumps(
+                    x, protocol=HIGHEST_PROTOCOL))
+                self.decode = lambda x: loads(decompress(x))
+            elif blob_protocol == "ujson":
+                import ujson
+                self.encode = lambda x: compress(
+                    bytes(ujson.dumps(x), "utf8"))
+                self.decode = lambda x: ujson.loads(
+                    str(decompress(x), "utf8"))
+            elif blob_protocol == "orjson":
+                import orjson
+                self.encode = lambda x: compress(orjson.dumps(x))
+                self.decode = lambda x: orjson.loads(decompress(x))
+        else:
+            if blob_protocol == "pickle":
+                self.encode = lambda x: dumps(x, protocol=HIGHEST_PROTOCOL)
+                self.decode = loads
+            elif blob_protocol == "ujson":
+                import ujson
+                self.encode = lambda x: bytes(ujson.dumps(x), "utf8")
+                self.decode = lambda x: ujson.loads(str(x, "utf8"))
+            elif blob_protocol == "orjson":
+                import orjson
+                self.encode = orjson.dumps
+                self.decode = orjson.loads
 
     # =========================================================================
     # properties
@@ -215,6 +234,17 @@ class InterlaceDB:
         self._id2dataset[identifier] = dset
         return dset
 
+    def create_array(self, name, dt):
+        if name in self.datasets:
+            raise DatasetExistsError("A dataset named '{name}' already exists")
+
+        identifier = len(self.datasets) + 3
+        dset = Array(identifier, self, name, dt)
+        self.datasets[name] = dset
+        self._id2size[identifier] = len(dset)
+        self._id2dataset[identifier] = dset
+        return dset
+
     def create_header(self, **fields):
         if self.file_size != 0:
             raise HeaderExistsError("Header already exists")
@@ -262,6 +292,23 @@ class InterlaceDB:
         self._write_at(index, data_bytes)
         self.index += data_size
         return index
+
+    def append_blob(self, blob):
+        blob_bytes = self.encode(blob)
+        blob_size = len(blob_bytes)
+
+        data_bytes = b''.join((
+            self._blob_identifier,  # 1 is blob identifier
+            uint32(blob_size).tobytes(),  # blob size in uint32
+            blob_bytes  # actual content of the blob
+        ))
+        return self._append(data_bytes)
+
+    def get_blob(self, index):
+        byte_index = index + 1
+        size = frombuffer(self._read_at(byte_index, 4), dtype=uint32)[0]
+        blob_bytes = self.f.read(size)
+        return self.decode(blob_bytes)
 
     # =========================================================================
     # file IO management methods
@@ -362,22 +409,6 @@ class InterlaceDB:
     # def put(self, index, data):
     #     byte_index = self.from_unit(index)
     #     self.write_at(byte_index, data)
-
-    # def append_blob(self, blob):
-    #     blob_bytes = self.encode(blob)
-    #     blob_size = len(blob_bytes)
-
-    #     data_bytes = b''.join((
-    #         int8(1).tobytes(),  # 1 is blob identifier
-    #         uint32(blob_size).tobytes(),
-    #         blob_bytes))
-    #     return self.append(data_bytes)
-
-    # def get_blob(self, index):
-    #     byte_index = self.from_unit(index) + 1
-    #     size = frombuffer(self.read_at(byte_index, 4), dtype=uint32)[0]
-    #     blob_bytes = self.f.read(size)
-    #     return self.decode(blob_bytes)
 
     # def to_unit(self, bytes_size):
     #     return int(ceil(bytes_size / self.unit_size))

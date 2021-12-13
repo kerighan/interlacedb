@@ -12,31 +12,32 @@ class LayeredHashTable:
         self.dataset = dataset
         self.dstruct_name = f"{dataset.name}_LHT"
         self.tables_id_key = f"{self.dstruct_name}_tables_id"
+        self._block_id_key = f"{self.dstruct_name}_block_id"
 
     def _get_header_fields(self):
-        return {
-            f"{self.tables_id_key}_{i}": "uint64"
-            for i in range(32)
-        }
+        return {f"{self._block_id_key}": "uint64"}
 
     def _initialize(self):
-        self._load_tables_id()
-        if np.sum(self.tables_id) == 0:  # first initialization
+        self._block_id = self._db.header[self._block_id_key]
+        self._arr = self._db.create_array(self.tables_id_key, "uint64")
+        if self._block_id == 0:
+            # create array
+            self._block_id = self._arr.new_block(32)
+            self._db.header[self._block_id_key] = self._block_id
+
             table_id = self.dataset.new_block(self._get_capacity(self.p_init))
-            self.tables_id[0] = table_id
-            self._save_tables_id(0)
+            self._arr.set_value(self._block_id, 0, table_id)
             self.p_last = self.p_init
+            self._load_tables_id()
         else:
+            self._load_tables_id()
             self.p_last = np.max(np.nonzero(self.tables_id)) + self.p_init
 
-    def _save_tables_id(self, index):
-        self._db.header[f"{self.tables_id_key}_{index}"] = self.tables_id[index]
+    def _save_tables_id(self, index, table_id):
+        self._arr.set_value(self._block_id, index, table_id)
 
     def _load_tables_id(self):
-        self.tables_id = [
-            self._db.header[f"{self.tables_id_key}_{i}"]
-            for i in range(32)
-        ]
+        self.tables_id = list(self._arr.get_values(self._block_id, 0, 32))
 
     def _remove_database_reference(self):
         if hasattr(self, "_db"):
@@ -62,11 +63,12 @@ class LayeredHashTable:
         table_id = self.dataset.new_block(capacity)
         index = self.p_last - self.p_init
         self.tables_id[index] = table_id
-        self._save_tables_id(index)
+        self._save_tables_id(index, table_id)
 
     def insert(self, data):
         key = data[self.key]
         key_hash = self._hash(key)
+
         p, position = self.find_insert_position(key, key_hash)
         table_id = self.tables_id[p - self.p_init]
 

@@ -16,33 +16,35 @@ class Dataset:
         self._offset = 0
 
         # add methods from db
-        self._db = db
         self._read_at = db._read_at
         self._write_at = db._write_at
         self._db_append = db._append
         self._db_allocate = db._allocate
-        # self._db_append_blob = db.append_blob
-        # self._db_get_blob = db.get_blob
+        self._db_get_blob = db.get_blob
+        self._db_append_blob = db.append_blob
 
         self._compile()
 
     def _remove_database_reference(self):
-        del self._db
-        del self._read_at
-        del self._write_at
-        del self._db_append
-        del self._db_allocate
-        # del self._db_append_blob
-        # del self._db_get_blob
+        if hasattr(self, "_read_at"):
+            del self._read_at
+        if hasattr(self, "_write_at"):
+            del self._write_at
+        if hasattr(self, "_db_append"):
+            del self._db_append
+        if hasattr(self, "_db_allocate"):
+            del self._db_allocate
+        if hasattr(self, "_db_append_blob"):
+            del self._db_append_blob
+        del self._db_get_blob
 
     def _add_database_reference(self, db):
-        self._db = db
         self._read_at = db._read_at
         self._write_at = db._write_at
         self._db_append = db._append
         self._db_allocate = db._allocate
-        # self._db_append_blob = db.append_blob
-        # self._db_get_blob = db.get_blob
+        self._db_get_blob = db.get_blob
+        self._db_append_blob = db.append_blob
 
     def _compile(self):
         self._blob_fields = set()
@@ -74,7 +76,8 @@ class Dataset:
             for f in self._blob_fields:
                 if f not in data:
                     data[f] = 0
-                    continue
+                else:
+                    data[f] = self._db_append_blob(data[f])
         res = tuple(data.get(key, 0) for key in self._field)
         return array(res, dtype=self._dtypes)
 
@@ -96,7 +99,7 @@ class Dataset:
             if blob_id == 0:
                 del res[field]
                 continue
-            # res[field] = self._db_get_blob(blob_id)
+            res[field] = self._db_get_blob(blob_id)
         return res
 
     # =========================================================================
@@ -443,3 +446,53 @@ class Group(Dataset):
                     return self.set_value(block_index, item_1, value)
             elif arg_len == 3:
                 return self.set_data_value(*args, value)
+
+
+class Array(Dataset):
+    def __init__(self, identifier, db, name, dt):
+        self.name = name
+        self._identifier = identifier
+        self._dtype = dtype(dt)
+        self._dt_size = self._dtype.itemsize
+        self._prefix = PREFIX_DTYPE(identifier).tobytes()
+        self._prefix_size = len(self._prefix)
+        self._len = self._dt_size
+
+        # db methods
+        self._db_allocate = db._allocate
+        self._write_at = db._write_at
+        self._read_at = db._read_at
+
+    def new_block(self, size):
+        return self._db_allocate(self._dt_size * size + self._prefix_size)
+
+    def set_value(self, block_index, index, value):
+        index = block_index + self._dt_size * index + self._prefix_size
+        data = array(value, dtype=self._dtype).tobytes()
+        self._write_at(index, data)
+
+    def get_value(self, block_index, index):
+        index = block_index + self._dt_size * index + self._prefix_size
+        data_bytes = self._read_at(index, self._dt_size)
+        res = frombuffer(data_bytes, dtype=self._dtype)[0]
+        return res
+
+    def get_values(self, block_index, start, end):
+        start = block_index + self._dt_size * start + self._prefix_size
+        end = block_index + self._dt_size * end + self._prefix_size
+        data_bytes = self._read_at(start, end-start)
+        res = frombuffer(data_bytes, dtype=self._dtype)
+        return res
+
+    def __getitem__(self, args):
+        block_index, position = args
+        if isinstance(position, int):
+            return self.get_value(block_index, position)
+        elif isinstance(position, slice):
+            start = position.start or 0
+            end = position.stop
+            assert end is not None
+            return self.get_values(block_index, start, end)
+
+    def __setitem__(self, args, value):
+        return self.set_value(*args, value)
