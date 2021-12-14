@@ -1,37 +1,42 @@
 import os
 
 import pandas as pd
+from numpy.core.shape_base import block
 from numpy.lib.arraysetops import isin
 
 from .database import InterlaceDB
 
 
 class DataFrame:
-    def __init__(self, filename, df=None):
+    def __init__(self, filename, df=None, **kwargs):
         if df is not None:
             if os.path.exists(filename):
                 os.remove(filename)
-            with InterlaceDB(filename) as db:
+            with InterlaceDB(filename, **kwargs) as db:
                 self.data = db.create_dataset("data", value="blob")
-                self.header = db.create_header(len="uint32")
-                self.db = db
+                db.create_header(len="uint32", start="uint32")
+            self.db = db
+            self.header = db.header
             self.write_dataframe(df)
         else:
             db = InterlaceDB(filename)
-            self.data = db["data"]
+            self.data = db.datasets["data"]
             self.header = db.header
+            self.start = self.header["start"]
 
     def write_dataframe(self, df):
         from tqdm import tqdm
+        self.start = self.data.new_block(len(df))
+
         self.header["len"] = len(df)
-        block_id = self.data.new_block(len(df))
+        self.header["start"] = self.start
         i = 0
         for _, row in tqdm(df.iterrows(), total=len(df)):
-            self.data[block_id, i] = {"value": dict(row)}
+            self.data[self.start, i] = {"value": dict(row)}
             i += 1
 
     def get_row(self, index):
-        return self.data.at[0, index]["value"]
+        return self.data[self.start, index]["value"]
 
     def get_rows(self, start, end):
         if end < 0:
