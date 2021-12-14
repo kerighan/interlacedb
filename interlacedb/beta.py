@@ -12,7 +12,7 @@ class DataFrame:
         if df is not None:
             if os.path.exists(filename):
                 os.remove(filename)
-            with InterlaceDB(filename, **kwargs) as db:
+            with InterlaceDB(filename, flag="n", **kwargs) as db:
                 self.data = db.create_dataset("data", value="blob")
                 db.create_header(len="uint32", start="uint32")
             self.db = db
