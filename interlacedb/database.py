@@ -3,7 +3,7 @@ from pickle import HIGHEST_PROTOCOL, dumps, loads
 
 from numpy import array, ceil, dtype, frombuffer, int8, uint32, where
 
-from .dataset import Array, Dataset, Group, blob_dt
+from .dataset import Array, BoolArray, Dataset, Group, blob_dt
 from .exception import DatasetExistsError, HeaderExistsError
 
 STEP_SIZE = 10000
@@ -200,7 +200,8 @@ class InterlaceDB:
 
     def create_dataset(self, name, **kwargs):
         if name in self.datasets:
-            raise DatasetExistsError("A dataset named '{name}' already exists")
+            raise DatasetExistsError(
+                f"A dataset named '{name}' already exists")
 
         identifier = len(self.datasets) + 3
         dtypes = []
@@ -218,7 +219,8 @@ class InterlaceDB:
 
     def create_group(self, name, dataset, **kwargs):
         if name in self.datasets:
-            raise DatasetExistsError("A dataset named '{name}' already exists")
+            raise DatasetExistsError(
+                f"A dataset named '{name}' already exists")
 
         identifier = len(self.datasets) + 3
         dtypes = []
@@ -236,10 +238,14 @@ class InterlaceDB:
 
     def create_array(self, name, dt):
         if name in self.datasets:
-            raise DatasetExistsError("A dataset named '{name}' already exists")
+            raise DatasetExistsError(
+                f"A dataset named '{name}' already exists")
 
         identifier = len(self.datasets) + 3
-        dset = Array(identifier, self, name, dt)
+        if dt == "bool":
+            dset = BoolArray(identifier, self, name)
+        else:
+            dset = Array(identifier, self, name, dt)
         self.datasets[name] = dset
         self._id2size[identifier] = len(dset)
         self._id2dataset[identifier] = dset

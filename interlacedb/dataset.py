@@ -1,5 +1,6 @@
+from ctypes import c_uint8
+
 from numpy import array, dtype, frombuffer, int8, str_, uint32
-from numpy.lib.arraysetops import isin
 
 blob_dt = dtype([("blob", uint32)])
 PREFIX_DTYPE = int8
@@ -36,7 +37,8 @@ class Dataset:
             del self._db_allocate
         if hasattr(self, "_db_append_blob"):
             del self._db_append_blob
-        del self._db_get_blob
+        if hasattr(self, "_db_get_blob"):
+            del self._db_get_blob
 
     def _add_database_reference(self, db):
         self._read_at = db._read_at
@@ -143,6 +145,7 @@ class Dataset:
     def get(self, block_index, row_index=0):
         index = self._get_index_from(block_index, row_index)
         data_bytes = self._read_at(index, 1)
+
         identifier = frombuffer(data_bytes, dtype="int8")[0]
         if identifier != self._identifier:
             raise KeyError
@@ -151,6 +154,7 @@ class Dataset:
         return self._parse(data_bytes)
 
     def get_value(self, block_index, row_index, key):
+        # print("here")
         dt_size, align, dt = self._field[key]
         index = self._get_index_from(block_index, row_index) + align
         data_bytes = self._read_at(index, dt_size)
@@ -169,6 +173,15 @@ class Dataset:
         data = array(value, dtype=dt).tobytes()
         self._write_at(index, data)
 
+    def delete(self, block_index, row_index):
+        index = self._get_index_from(block_index, row_index)
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier != self._identifier:
+            raise KeyError
+        new_identifier = array(-identifier, dtype="int8").tobytes()
+        self._write_at(index, new_identifier)
+
     def exists(self, block_index, row_index):
         index = self._get_index_from(block_index, row_index)
         data_bytes = self._read_at(index, 1)
@@ -176,6 +189,16 @@ class Dataset:
         if identifier != self._identifier:
             return False
         return True
+
+    def status(self, block_index, row_index):
+        index = self._get_index_from(block_index, row_index)
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier == self._identifier:
+            return 1
+        elif identifier == -self._identifier:
+            return -1
+        return 0
 
     def __getitem__(self, args):
         if isinstance(args, tuple):
@@ -195,96 +218,11 @@ class Dataset:
                 return self.set_value(*args, value)
         return self._set_field_no_index(args, value)
 
-    # def _build(self):
-    #     field_to_dtype = {}
-    #     self.size_align_dtype = {}
-    #     self.string_fields = set()
-    #     self.blob_fields = set()
-    #     cum_pos = self.prefix_size
-    #     for key, dt in self.dtypes:
-    #         item_size = dt.itemsize
-    #         field_to_dtype[key] = dt
-    #         self.size_align_dtype[key] = (item_size, cum_pos, dt)
-
-    #         if dt != blob_dt:  # item is regular field
-    #             cum_pos += item_size
-    #             if dt.type is str_:
-    #                 self.string_fields.add(key)
-    #         else:  # item is blob
-    #             cum_pos += 4
-    #             self.blob_fields.add(key)
-    #     self.len = cum_pos
-    #     self.field_to_dtype = field_to_dtype
-    #     self.fields = list(self.field_to_dtype.keys())
-    #     self.has_blob = len(self.blob_fields) != 0
-
-    # def _finalize(self):
-    #     self.size = self.to_unit(self.len)
-    #     self.at = At(self)
-
     # def parse_blob(self, data):
     #     for field in self.blob_fields:
     #         if field not in data:
     #             continue
     #         data[field] = self.db_append_blob(data[field])
-
-    # def _get_item_inplace(self, field):
-    #     size, align, dt = self.size_align_dtype[field]
-
-    #     data_bytes = self.read_at(
-    #         self.offset + align, size)
-    #     res = frombuffer(data_bytes, dtype=dt)[0]
-    #     return res
-
-    # def _get_row(self, index):
-    #     # check row is indeed of good type
-    #     byte_index = self.from_unit(index)
-    #     data_bytes = self.read_at(byte_index, 1)
-    #     identifier = frombuffer(data_bytes, dtype="int8")[0]
-    #     if identifier != self.identifier:
-    #         raise KeyError
-    #     byte_index += self.prefix_size
-    #     data_bytes = self.read_at(byte_index, self.len - self.prefix_size)
-    #     return self._parse(data_bytes)
-
-    # def _get_item(self, index, field):
-    #     size, align, dt = self.size_align_dtype[field]
-
-    #     byte_index = self.from_unit(index)
-    #     data_bytes = self.read_at(
-    #         byte_index + align, size)
-    #     res = frombuffer(data_bytes, dtype=dt)[0]
-    #     return res
-
-    # def _get_items(self, start, stop):
-    #     n_items = stop - start
-
-    #     byte_index = self.from_unit(start)
-    #     data_bytes = self.read_at(byte_index, self.len * n_items)
-    #     res = frombuffer(data_bytes, dtype=[("prefix", int8)] + self.dtypes)
-    #     data = [{key: item[key] for key in self.fields} for item in res]
-    #     return data
-
-    # def _set_item_inplace(self, field, value):
-    #     _, align, dt = self.size_align_dtype[field]
-    #     data = array(value, dtype=dt)
-    #     self.write_at(self.offset + align, data)
-
-    # def _set_row(self, index, data):
-    #     data_bytes = self.to_bytes(**data)
-    #     byte_index = self.from_unit(index)
-    #     self.write_at(byte_index, data_bytes)
-
-    # def _set_item(self, index, field, value):
-    #     _, align, dt = self.size_align_dtype[field]
-    #     data = array(value, dtype=dt)
-    #     byte_index = self.from_unit(index)
-    #     self.write_at(byte_index + align, data)
-
-    # def _set_rows(self, start, rows):
-    #     byte_index = self.from_unit(start)
-    #     data_bytes = b''.join(self.to_bytes(**row) for row in rows)
-    #     self.write_at(byte_index, data_bytes)
 
     # def __delitem__(self, start):
     #     byte_index = self.from_unit(start)
@@ -467,22 +405,74 @@ class Array(Dataset):
         return self._db_allocate(self._dt_size * size + self._prefix_size)
 
     def set_value(self, block_index, index, value):
-        index = block_index + self._dt_size * index + self._prefix_size
+        index = int(block_index + self._dt_size * index + self._prefix_size)
         data = array(value, dtype=self._dtype).tobytes()
         self._write_at(index, data)
 
     def get_value(self, block_index, index):
-        index = block_index + self._dt_size * index + self._prefix_size
+        index = int(block_index + self._dt_size * index + self._prefix_size)
         data_bytes = self._read_at(index, self._dt_size)
         res = frombuffer(data_bytes, dtype=self._dtype)[0]
         return res
 
     def get_values(self, block_index, start, end):
-        start = block_index + self._dt_size * start + self._prefix_size
-        end = block_index + self._dt_size * end + self._prefix_size
+        start = int(block_index + self._dt_size * start + self._prefix_size)
+        end = int(block_index + self._dt_size * end + self._prefix_size)
         data_bytes = self._read_at(start, end-start)
         res = frombuffer(data_bytes, dtype=self._dtype)
         return res
+
+    def __getitem__(self, args):
+        block_index, position = args
+        if isinstance(position, int):
+            return self.get_value(block_index, position)
+        elif isinstance(position, slice):
+            start = position.start or 0
+            end = position.stop
+            assert end is not None
+            return self.get_values(block_index, start, end)
+
+    def __setitem__(self, args, value):
+        return self.set_value(*args, value)
+
+
+class BoolArray(Dataset):
+    def __init__(self, identifier, db, name):
+        self.name = name
+        self._identifier = identifier
+        self._byte_to_bool = {
+            b'\x01': True,
+            b'\x00': False
+        }
+        self._bool_to_byte = {
+            True: b'\x01',
+            False: b'\x00'
+        }
+        self._prefix = PREFIX_DTYPE(identifier).tobytes()
+        self._prefix_size = len(self._prefix)
+        self._len = 1
+
+        # db methods
+        self._db_allocate = db._allocate
+        self._write_at = db._write_at
+        self._read_at = db._read_at
+
+    def new_block(self, size):
+        return self._db_allocate(size + self._prefix_size)
+
+    def set_value(self, block_index, index, value):
+        index = int(block_index + index + self._prefix_size)
+        self._write_at(index, self._bool_to_byte[value])
+
+    def get_value(self, block_index, index):
+        index = int(block_index + index + self._prefix_size)
+        data_bytes = self._read_at(index, 1)
+        return self._byte_to_bool[data_bytes]
+
+    def get_values(self, block_index, start, end):
+        index = int(block_index + start + self._prefix_size)
+        data_bytes = self._read_at(index, end-start)
+        return list(data_bytes)
 
     def __getitem__(self, args):
         block_index, position = args
