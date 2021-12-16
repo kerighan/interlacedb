@@ -279,12 +279,15 @@ class Dict:
 
     def insert(self, key, value):
         key_hash = self._hash(key)
-        self.dstruct[key_hash] = {"value": value}
+        self.dstruct[key_hash] = {"value": {
+            "value": value,
+            "key": key
+        }}
 
     def get(self, key, res=None):
         key_hash = self._hash(key)
         try:
-            return self.dstruct[key_hash]["value"]
+            return self.dstruct[key_hash]["value"]["value"]
         except KeyError:
             return res
 
@@ -300,3 +303,7 @@ class Dict:
     def __contains__(self, key):
         key_hash = self._hash(key)
         return key_hash in self.dstruct
+
+    def __iter__(self):
+        for data in self.dstruct:
+            yield data["value"]["key"], data["value"]["value"]

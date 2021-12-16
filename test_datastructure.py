@@ -17,6 +17,9 @@ def test_dict():
     for i in tqdm(range(N)):
         db[f"test_{i}"]
 
+    for key, value in tqdm(db, total=N):
+        pass
+
 
 def test_layeredtable():
     N = 100000
