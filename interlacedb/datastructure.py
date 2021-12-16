@@ -1,8 +1,10 @@
 import mmh3
 import numpy as np
 
+from interlacedb.database import InterlaceDB
 
-class LayeredHashTable:
+
+class LayeredTable:
     def __init__(
         self, dataset, key, branching_factor=2, p_init=10, probe_factor=.5,
         n_bloom_filters=10, bloom_seed=12
@@ -248,3 +250,53 @@ class LayeredHashTable:
 
     def __delitem__(self, key):
         self.delete(key)
+
+
+class Dict:
+    def __init__(self, filename, size=1024, **kwargs):
+        from numpy import log2
+        p_init = int(round(log2(size)))
+
+        import os
+        if not os.path.exists(filename):
+            with InterlaceDB(filename, **kwargs) as db:
+                dset = db.create_dataset("dset", key="uint64", value="blob")
+                dstruct = db.create_datastructure(
+                    "dstruct",
+                    LayeredTable(
+                        dset, "key",
+                        n_bloom_filters=20,
+                        p_init=p_init,
+                        probe_factor=.3))
+        else:
+            db = InterlaceDB(filename, **kwargs)
+            dstruct = db.datastructures["dstruct"]
+        self.dstruct = dstruct
+
+    def _hash(self, key):
+        from cityhash import CityHash64
+        return CityHash64(key)
+
+    def insert(self, key, value):
+        key_hash = self._hash(key)
+        self.dstruct[key_hash] = {"value": value}
+
+    def get(self, key, res=None):
+        key_hash = self._hash(key)
+        try:
+            return self.dstruct[key_hash]["value"]
+        except KeyError:
+            return res
+
+    def __setitem__(self, key, value):
+        self.insert(key, value)
+
+    def __getitem__(self, key):
+        res = self.get(key)
+        if res != None:
+            return res
+        raise KeyError
+
+    def __contains__(self, key):
+        key_hash = self._hash(key)
+        return key_hash in self.dstruct
