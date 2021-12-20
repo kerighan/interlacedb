@@ -1,18 +1,44 @@
 import mmh3
 import numpy as np
-
 from interlacedb.database import InterlaceDB
 
 
-class LayeredTable:
+class HashTable:
+    def _remove_database_reference(self):
+        if hasattr(self, "_db"):
+            del self._db
+
+    def _add_database_reference(self, db):
+        self._db = db
+
+    def _hash(self, key, seed=0):
+        if not isinstance(key, str):
+            key = str(key)
+        return mmh3.hash(key, seed=seed, signed=False)
+
+    def __contains__(self, key):
+        return self.contains(key)
+
+    def __getitem__(self, key):
+        return self.lookup(key)
+
+    def __setitem__(self, key, data):
+        data[self.key] = key
+        self.insert(data)
+
+    def __delitem__(self, key):
+        self.delete(key)
+
+
+class LayerTable(HashTable):
     def __init__(
-        self, dataset, key, branching_factor=2, p_init=10, probe_factor=.5,
+        self, dataset, key, growth_factor=2, p_init=10, probe_factor=.5,
         n_bloom_filters=10, bloom_seed=12
     ):
         self.key = key
         self.p_init = p_init
         self.probe_factor = probe_factor
-        self.branching_factor = branching_factor
+        self.growth_factor = growth_factor
         self.n_bloom_filters = n_bloom_filters
         self.bloom_seed = bloom_seed
 
@@ -77,23 +103,11 @@ class LayeredTable:
         self.bloom_filters = list(
             self._positions.get_values(self._bloom_id, 0, 32))
 
-    def _remove_database_reference(self):
-        if hasattr(self, "_db"):
-            del self._db
-
-    def _add_database_reference(self, db):
-        self._db = db
-
-    def _hash(self, key, seed=0):
-        if not isinstance(key, str):
-            key = str(key)
-        return mmh3.hash(key, seed=seed, signed=False)
-
     def _get_range(self, p):
-        return range(int(round(p * self.probe_factor * self.branching_factor)))
+        return range(int(round(p * self.probe_factor * self.growth_factor)))
 
     def _get_capacity(self, p):
-        return self.branching_factor**p
+        return self.growth_factor**p
 
     def _create_new_hashtable(self):
         self.p_last += 1
@@ -238,19 +252,6 @@ class LayeredTable:
                 if self.exists(table_id, i):
                     yield self.get(table_id, i)
 
-    def __contains__(self, key):
-        return self.contains(key)
-
-    def __getitem__(self, key):
-        return self.lookup(key)
-
-    def __setitem__(self, key, data):
-        data[self.key] = key
-        self.insert(data)
-
-    def __delitem__(self, key):
-        self.delete(key)
-
 
 class Dict:
     def __init__(self, filename, size=1024, **kwargs):
@@ -263,7 +264,7 @@ class Dict:
                 dset = db.create_dataset("dset", key="uint64", value="blob")
                 dstruct = db.create_datastructure(
                     "dstruct",
-                    LayeredTable(
+                    LayerTable(
                         dset, "key",
                         n_bloom_filters=20,
                         p_init=p_init,
@@ -275,19 +276,19 @@ class Dict:
 
     def _hash(self, key):
         from cityhash import CityHash64
-        return CityHash64(key)
+        res = CityHash64(key)
+        if res != 0:
+            return res
+        return 1
 
     def insert(self, key, value):
         key_hash = self._hash(key)
-        self.dstruct[key_hash] = {"value": {
-            "value": value,
-            "key": key
-        }}
+        self.dstruct[key_hash] = {"value": (key, value)}
 
     def get(self, key, res=None):
         key_hash = self._hash(key)
         try:
-            return self.dstruct[key_hash]["value"]["value"]
+            return self.dstruct[key_hash]["value"][1]
         except KeyError:
             return res
 
@@ -296,7 +297,7 @@ class Dict:
 
     def __getitem__(self, key):
         res = self.get(key)
-        if res != None:
+        if res is not None:
             return res
         raise KeyError
 
@@ -306,4 +307,100 @@ class Dict:
 
     def __iter__(self):
         for data in self.dstruct:
-            yield data["value"]["key"], data["value"]["value"]
+            yield data["value"]
+
+
+class FracTable(HashTable):
+    def __init__(
+        self, dataset, key,
+        p_min=2, p_init=9
+    ):
+        self.key = key
+        self.p_init = p_init
+        self.p_min = p_min
+
+        self.dataset = dataset
+        self.dstruct_name = f"{dataset.name}_FT"
+        self._capsule_start_key = f"{self.dstruct_name}_capsule_start"
+        self._capsule_key = f"{self.dstruct_name}_capsule"
+
+    def _get_header_fields(self):
+        return {
+            f"{self._capsule_start_key}": "uint64"
+        }
+
+    def _initialize(self):
+        self._capsule_start = self._db.header[self._capsule_start_key]
+        self._capsule = self._db.create_array(self._capsule_key, "uint64")
+
+        if self._capsule_start == 0:
+            size_init = self._get_capacity(0)
+            self._capsule_start = self._capsule.new_block(3 * size_init)
+            self._db.header[self._capsule_start_key] = self._capsule_start
+        else:
+            pass
+
+        self.get = self.dataset.get
+        self.exists = self.dataset.exists
+        self.status = self.dataset.status
+        self.get_value = self.dataset.get_value
+
+    def insert(self, data):
+        key = data[self.key]
+        key_hash = self._hash(key)
+        caps_pos, position, empty = self._find_position(key_hash, key)
+        self._insert_new(caps_pos, position, key_hash, data)
+
+    def lookup(self, key):
+        key_hash = self._hash(key)
+        caps_pos, position, empty = self._find_position(key_hash, key)
+        if empty:
+            raise KeyError
+        return self._lookup(caps_pos, position)
+
+    def _insert_new(self, caps_pos, position, key_hash, data):
+        data_id = self.dataset.append(**data)
+        self._capsule[caps_pos, position] = key_hash
+        self._capsule[caps_pos, position + 1] = data_id
+
+    def _lookup(self, caps_pos, position):
+        data_id = self._capsule[caps_pos, position + 1]
+        return self.dataset[data_id, 0]
+
+    def contains(self, key):
+        key_hash = self._hash(key)
+        _, _, empty = self._find_position(key_hash, key)
+        return not empty
+
+    def _get_capacity(self, depth):
+        # if depth == 0:
+        #     capacity = self.size_init
+        # else:
+        #     capacity = self.growth_factor
+        capacity = max(2**self.p_min,
+                       2**(self.p_init - depth))
+        return capacity - 1
+
+    def _find_position(self, key_hash, key):
+        depth = 0
+        caps_pos = self._capsule_start
+        while True:
+            capacity = self._get_capacity(depth)
+
+            # 3 because: hash, item_position, next_capsule
+            position = 3 * (key_hash % capacity)
+
+            current_hash = self._capsule[caps_pos, position]
+            if current_hash == 0:  # capsule free
+                return caps_pos, position, True
+            elif current_hash == key_hash:
+                return caps_pos, position, False
+            else:
+                next_capsule_pos = self._capsule[caps_pos, position + 2]
+                if next_capsule_pos == 0:
+                    next_capacity = self._get_capacity(depth + 1)
+                    next_capsule_pos = self._capsule.new_block(
+                        3 * next_capacity)
+                    self._capsule[caps_pos, position + 2] = next_capsule_pos
+                caps_pos = next_capsule_pos
+                depth += 1

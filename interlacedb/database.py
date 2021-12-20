@@ -43,6 +43,7 @@ class InterlaceDB:
         self._blob_identifier = int8(1).tobytes()
 
         # open file
+        self.flag = flag
         if flag == "n" and os.path.exists(filename):
             os.remove(filename)
         self.open()
@@ -51,8 +52,11 @@ class InterlaceDB:
         # create new file if needed, else open in rb+ mode
         if self._is_new_database():
             self.f = open(self.filename, "wb+")
-        else:
+        elif self.flag != "r":
             self.f = open(self.filename, "rb+")
+            self._load()
+        else:
+            self.f = open(self.filename, "rb")
             self._load()
 
     def _get_encoder_and_decoder(self, blob_protocol, blob_zip):
@@ -329,6 +333,7 @@ class InterlaceDB:
     def _write_at(self, index, data):
         self.f.seek(index)
         self.f.write(data)
+        self.f.flush()
 
     def _read_at(self, start, size):
         self.f.seek(start)

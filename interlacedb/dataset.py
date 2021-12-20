@@ -1,3 +1,4 @@
+import enum
 from ctypes import c_uint8
 
 from numpy import array, dtype, frombuffer, int8, str_, uint32
@@ -104,6 +105,41 @@ class Dataset:
             res[field] = self._db_get_blob(blob_id)
         return res
 
+    def _parse_with_prefix(self, res):
+        _dtypes = [("prefix", PREFIX_DTYPE)] + self._dtypes
+        res = frombuffer(res, dtype=_dtypes)
+
+        # data = []
+        f = ["identifier"] + list(self._field.keys())
+        data = [dict(zip(f, r)) for r in res]
+        return data
+        # iden = self._identifier
+        # for r in res:
+        #     tmp = {}
+        #     for i, field in enumerate(f):
+        #         if i != 0:
+        #             tmp[field] = r[i]
+        #         else:
+        #             if r[0] == iden:
+        #                 continue
+        #             tmp = None
+        #             break
+        #     data.append(tmp)
+        # return data
+
+        # if not self._has_blob:
+        #     return dict(zip(self._field, res))
+
+        # res = dict(zip(self._field, res))
+        # for field in self._blob_fields:
+        #     blob_id = res[field][0]
+        #     if blob_id == 0:
+        #         del res[field]
+        #         continue
+        #     res[field] = self._db_get_blob(blob_id)
+        # return res
+        return res
+
     # =========================================================================
     # overloading functions
     # =========================================================================
@@ -152,6 +188,16 @@ class Dataset:
         data_bytes = self._read_at(index + self._prefix_size,
                                    self._len - self._prefix_size)
         return self._parse(data_bytes)
+
+    def get_slice(self, block_index, s):
+        start = s.start or 0
+        stop = s.stop
+        length = stop - start
+
+        index = self._get_index_from(block_index, start)
+        data_bytes = self._read_at(index,
+                                   self._len * length)
+        return self._parse_with_prefix(data_bytes)
 
     def get_value(self, block_index, row_index, key):
         # print("here")
@@ -204,7 +250,9 @@ class Dataset:
         if isinstance(args, tuple):
             arg_len = len(args)
             if arg_len == 2:
-                return self.get(*args)
+                if isinstance(args[1], int):
+                    return self.get(*args)
+                return self.get_slice(*args)
             elif arg_len == 3:
                 return self.get_value(*args)
         return self._get_field_no_index(args)
