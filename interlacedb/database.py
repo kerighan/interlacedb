@@ -31,6 +31,7 @@ class InterlaceDB:
         self.header = None
         self.datasets = {}
         self.datastructures = {}
+        self.commit = True
 
         # internal list of header fields
         self._header_fields = {"_index": dtype("uint64")}
@@ -47,6 +48,13 @@ class InterlaceDB:
         if flag == "n" and os.path.exists(filename):
             os.remove(filename)
         self.open()
+    
+    def begin_transaction(self):
+        self.commit = False
+
+    def end_transaction(self):
+        self.commit = True
+        self.f.flush()
 
     def open(self):
         # create new file if needed, else open in rb+ mode
@@ -333,7 +341,8 @@ class InterlaceDB:
     def _write_at(self, index, data):
         self.f.seek(index)
         self.f.write(data)
-        self.f.flush()
+        if self.commit:
+            self.f.flush()
 
     def _read_at(self, start, size):
         self.f.seek(start)

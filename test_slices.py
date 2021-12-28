@@ -10,10 +10,10 @@ with InterlaceDB("test.db", flag="n") as db:
 N = 100000
 block_id = edge.new_block(N)
 for i in tqdm(range(N)):
+    if i == 2:
+        continue
     edge[block_id, i] = dict(value=i)
 
 start = time.time()
-# for i in range(N):
-#     edge[block_id, i]
-edge[block_id, :N]
+d = edge[block_id, :N, "value"]
 print(time.time() - start)

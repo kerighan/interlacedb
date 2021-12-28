@@ -22,14 +22,15 @@ def test_dict():
 
 
 def test_layertable():
-    N = 25000000
+    N = 100000
     with InterlaceDB("test_2.db", flag="n") as db:
         node = db.create_dataset(
             "node", key="U15", value="uint64")
         nodes = LayerTable(
             node, key="key",
             p_init=17, growth_factor=2, probe_factor=.1,
-            n_bloom_filters=50)  # 188.7, 165.6
+            cache_len=100000,
+            n_bloom_filters=10)  # 188.7, 165.6
         db.create_datastructure("nodes", nodes)
 
     for i in tqdm(range(N)):
@@ -37,6 +38,10 @@ def test_layertable():
 
     for i in tqdm(range(N)):
         nodes[f"test_{i}"]
+
+    for i in tqdm(range(N)):
+        nodes[f"test_{i}"]
+
     print(nodes["test_55"])
 
 
@@ -46,7 +51,7 @@ def test_fractable():
         nodes = db.create_datastructure("nodes",
                                         FracTable(node, "key", p_init=9))
 
-    N = 1000000
+    N = 500000
     for i in tqdm(range(N)):
         nodes.insert({"key": f"test_{i}", "value": i})
     for i in tqdm(range(N)):

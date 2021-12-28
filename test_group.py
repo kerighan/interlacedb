@@ -16,5 +16,8 @@ node_group[block_id, "group_value"] = 5
 for i in range(100):
     node_group[block_id, i] = {"key": f"key_{i}", "value": i}
 
-for i in range(100):
-    print(node_group[block_id, i])
+# for i in range(100):
+#     print(node_group[block_id, i])
+print(node_group[block_id, 20])
+print(node_group[block_id, "group_value"])
+print(node_group[block_id])

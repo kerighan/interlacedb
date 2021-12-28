@@ -1,10 +1,8 @@
-import enum
-from ctypes import c_uint8
-
-from numpy import array, dtype, frombuffer, int8, str_, uint32
+from numpy import array, dtype, frombuffer, int8, str_, uint32, uint64, int64, int32
 
 blob_dt = dtype([("blob", uint32)])
 PREFIX_DTYPE = int8
+integer = (int, uint64, int64, uint32, int32)
 
 
 class Dataset:
@@ -16,14 +14,6 @@ class Dataset:
         self._prefix = PREFIX_DTYPE(identifier).tobytes()
         self._prefix_size = len(self._prefix)
         self._offset = 0
-
-        # add methods from db
-        self._read_at = db._read_at
-        self._write_at = db._write_at
-        self._db_append = db._append
-        self._db_allocate = db._allocate
-        self._db_get_blob = db.get_blob
-        self._db_append_blob = db.append_blob
 
         self._compile()
 
@@ -53,17 +43,19 @@ class Dataset:
         self._blob_fields = set()
         self._string_fields = set()
         self._field = {}
+        self._field_list = ["prefix"]
 
         position = self._prefix_size
-        for key, dt in self._dtypes:
+        for i, (key, dt) in enumerate(self._dtypes, 1):
             dt_size = dt.itemsize
-            self._field[key] = (dt.itemsize, position, dt)
+            self._field[key] = (i, dt.itemsize, position, dt)
             if dt != blob_dt:
                 if dt.type is str_:  # faster that way
                     self._string_fields.add(key)
             else:
                 self._blob_fields.add(key)
             position += dt_size
+            self._field_list.append(key)
         self._len = position
         self._has_blob = len(self._blob_fields) != 0
 
@@ -109,36 +101,37 @@ class Dataset:
         _dtypes = [("prefix", PREFIX_DTYPE)] + self._dtypes
         res = frombuffer(res, dtype=_dtypes)
 
-        # data = []
-        f = ["identifier"] + list(self._field.keys())
-        data = [dict(zip(f, r)) for r in res]
+        f = self._field_list
+        id_ = self._identifier
+        data = []
+        for r in res:
+            tmp = {}
+            for i, field in enumerate(f):
+                if i != 0:
+                    tmp[field] = r[i]
+                else:
+                    if r[0] == id_:
+                        continue
+                    else:
+                        tmp = None
+                        break
+            data.append(tmp)
         return data
-        # iden = self._identifier
-        # for r in res:
-        #     tmp = {}
-        #     for i, field in enumerate(f):
-        #         if i != 0:
-        #             tmp[field] = r[i]
-        #         else:
-        #             if r[0] == iden:
-        #                 continue
-        #             tmp = None
-        #             break
-        #     data.append(tmp)
-        # return data
+    
+    def _parse_values(self, res, key):
+        _dtypes = [("prefix", PREFIX_DTYPE)] + self._dtypes
+        res = frombuffer(res, dtype=_dtypes)
 
-        # if not self._has_blob:
-        #     return dict(zip(self._field, res))
-
-        # res = dict(zip(self._field, res))
-        # for field in self._blob_fields:
-        #     blob_id = res[field][0]
-        #     if blob_id == 0:
-        #         del res[field]
-        #         continue
-        #     res[field] = self._db_get_blob(blob_id)
-        # return res
-        return res
+        index, _, _, _ = self._field[key]
+        f = self._field_list
+        id_ = self._identifier
+        data = []
+        for r in res:
+            if r[0] == id_:
+                data.append(r[index])
+            else:
+                data.append(None)
+        return data
 
     # =========================================================================
     # overloading functions
@@ -159,12 +152,12 @@ class Dataset:
     # =========================================================================
 
     def _set_field_no_index(self, key, value):
-        _, align, dt = self._field[key]
+        _, _, align, dt = self._field[key]
         data = array(value, dtype=dt)
         self._write_at(self._offset + align, data)
 
     def _get_field_no_index(self, key):
-        dt_size, align, dt = self._field[key]
+        _, dt_size, align, dt = self._field[key]
         data_bytes = self._read_at(self._offset + align, dt_size)
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
@@ -193,15 +186,22 @@ class Dataset:
         start = s.start or 0
         stop = s.stop
         length = stop - start
-
         index = self._get_index_from(block_index, start)
         data_bytes = self._read_at(index,
                                    self._len * length)
         return self._parse_with_prefix(data_bytes)
+    
+    def get_slice_values(self, block_index, s, field):
+        start = s.start or 0
+        stop = s.stop
+        length = stop - start
+        index = self._get_index_from(block_index, start)
+        data_bytes = self._read_at(index,
+                                   self._len * length)
+        return self._parse_values(data_bytes, field)
 
     def get_value(self, block_index, row_index, key):
-        # print("here")
-        dt_size, align, dt = self._field[key]
+        _, dt_size, align, dt = self._field[key]
         index = self._get_index_from(block_index, row_index) + align
         data_bytes = self._read_at(index, dt_size)
         res = frombuffer(data_bytes, dtype=dt)[0]
@@ -213,7 +213,7 @@ class Dataset:
         self._write_at(index, data_bytes)
 
     def set_value(self, block_index, row_index, key, value):
-        _, align, dt = self._field[key]
+        _, _, align, dt = self._field[key]
         index = self._get_index_from(block_index, row_index) + align
 
         data = array(value, dtype=dt).tobytes()
@@ -250,11 +250,13 @@ class Dataset:
         if isinstance(args, tuple):
             arg_len = len(args)
             if arg_len == 2:
-                if isinstance(args[1], int):
+                if isinstance(args[1], (int, uint64, uint32)):
                     return self.get(*args)
                 return self.get_slice(*args)
             elif arg_len == 3:
-                return self.get_value(*args)
+                if isinstance(args[1], (int, uint64, uint32)):
+                    return self.get_value(*args)
+                return self.get_slice_values(*args)
         return self._get_field_no_index(args)
 
     def __setitem__(self, args, value):
@@ -333,20 +335,6 @@ class Group(Dataset):
         self._dataset_identifier = dataset._identifier
         self._dataset_field = dataset._field
         self._dataset_get_index_from = dataset._get_index_from
-        # db methods
-        self._db_allocate = dataset._db._allocate
-        self._write_at = dataset._db._write_at
-        self._read_at = dataset._db._read_at
-
-    def _remove_database_reference(self):
-        del self._db_allocate
-        del self._write_at
-        del self._read_at
-
-    def _add_database_reference(self, db):
-        self._db_allocate = db._allocate
-        self._write_at = db._write_at
-        self._read_at = db._read_at
 
     def new_block(self, size):
         block_id = self._db_allocate(self._len + self._dataset_len * size)
@@ -354,35 +342,35 @@ class Group(Dataset):
         return block_id
 
     def set_value(self, block_index, key, value):
-        _, align, dt = self._field[key]
-        index = block_index + align
+        _, _, align, dt = self._field[key]
+        index = int(block_index + align)
 
         data = array(value, dtype=dt).tobytes()
         self._write_at(index, data)
 
     def get_value(self, block_index, key):
-        dt_size, align, dt = self._field[key]
-        index = block_index + align
+        _, dt_size, align, dt = self._field[key]
+        index = int(block_index + align)
         data_bytes = self._read_at(index, dt_size)
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
 
     def set_data(self, block_index, row_index, data):
         data_bytes = self._dataset_to_bytes(data)
-        index = self._dataset_get_index_from(
-            block_index, row_index) + self._len
+        index = int(self._dataset_get_index_from(
+            block_index, row_index) + self._len)
         self._write_at(index, data_bytes)
 
     def set_data_value(self, block_index, row_index, key, value):
-        _, align, dt = self._dataset_field[key]
-        index = self._dataset_get_index_from(block_index,
-                                             row_index) + align + self._len
+        _, _, align, dt = self._dataset_field[key]
+        index = int(self._dataset_get_index_from(
+            block_index, row_index) + align + self._len)
         data = array(value, dtype=dt).tobytes()
         self._write_at(index, data)
 
     def get_data(self, block_index, row_index):
-        index = self._dataset_get_index_from(
-            block_index, row_index) + self._len
+        index = int(self._dataset_get_index_from(
+            block_index, row_index) + self._len)
         data_bytes = self._read_at(index, 1)
         identifier = frombuffer(data_bytes, dtype="int8")[0]
         if identifier != self._dataset_identifier:
@@ -392,13 +380,15 @@ class Group(Dataset):
         return self._dataset_parse(data_bytes)
 
     def get_data_value(self, block_index, row_index, key):
-        dt_size, align, dt = self._dataset_field[key]
-        index = block_index + align + self._len
+        _, dt_size, align, dt = self._dataset_field[key]
+        index = int(self._dataset_get_index_from(
+            block_index, row_index) + self._len + align)
         data_bytes = self._read_at(index, dt_size)
         res = frombuffer(data_bytes, dtype=dt)[0]
         return res
 
     def get(self, index):
+        index = int(index)
         data_bytes = self._read_at(index, 1)
         identifier = frombuffer(data_bytes, dtype="int8")[0]
         if identifier != self._identifier:
@@ -407,17 +397,35 @@ class Group(Dataset):
                                    self._len - self._prefix_size)
         return self._parse(data_bytes)
 
+    def status(self, block_index, row_index):
+        index = self._dataset_get_index_from(block_index, row_index) + self._len
+        data_bytes = self._read_at(index, 1)
+        identifier = frombuffer(data_bytes, dtype="int8")[0]
+        if identifier == self._dataset_identifier:
+            return 1
+        elif identifier == -self._dataset_identifier:
+            return -1
+        return 0
+
     def __getitem__(self, args):
         if isinstance(args, tuple):
             arg_len = len(args)
             if arg_len == 2:
                 block_index, item_1 = args
-                if isinstance(item_1, int):
+                if isinstance(item_1, integer):
                     return self.get_data(block_index, item_1)
                 elif isinstance(item_1, str):
                     return self.get_value(block_index, item_1)
+                elif isinstance(item_1, slice):
+                    return self._dataset.get_slice(block_index + self._len, item_1)
             elif arg_len == 3:
-                return self.get_data_value(*args)
+                
+                block_index, item_1, field = args
+                if isinstance(item_1, integer):
+                    return self.get_data_value(block_index, item_1, field)
+                elif isinstance(item_1, slice):
+                    return self._dataset.get_slice_values(
+                        block_index + self._len, item_1, field)
         else:
             return self.get(args)
 

@@ -17,10 +17,7 @@ for _ in tqdm(range(N)):
 
 for _ in tqdm(range(N)):
     i = randint(0, 100000-1)
-    i = 100000-1
     try:
         array[block_id, i]
     except IndexError:
         print(i)
-
-# print(array[block_id, 500:5000])
