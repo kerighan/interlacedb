@@ -1,1 +1,1 @@
-from .hashtable import Dict, FracTable, LayerTable, FloatingLayerTable
+from .hashtable import Dict, FracTable, LayerTable, MultiLayerTable

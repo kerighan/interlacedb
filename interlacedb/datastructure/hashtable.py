@@ -1,7 +1,7 @@
-from numpy.core.numeric import errstate
 import mmh3
 import numpy as np
 from interlacedb.database import InterlaceDB
+from numpy.core.numeric import errstate
 
 
 class HashTable:
@@ -45,7 +45,7 @@ class LayerTable(HashTable):
         self.growth_factor = growth_factor
         self.n_bloom_filters = n_bloom_filters
         self.bloom_seed = bloom_seed
-       
+
         # cache management
         self.cache_len = cache_len
 
@@ -66,7 +66,7 @@ class LayerTable(HashTable):
         self._block_id = self._db.header[self._block_id_key]
         self._positions = self._db.create_array(self.tables_id_key, "uint64")
         self._bloom = self._db.create_array(self._bloom_filter_key, "bool")
-        
+
         if self.cache_len > 0:
             from lru import LRU
             self.cache = LRU(self.cache_len)
@@ -136,14 +136,30 @@ class LayerTable(HashTable):
             self._positions.set_value(self._bloom_id, index, filter_id)
             self.bloom_filters[index] = filter_id
 
+    def find_insert_or_lookup_position(self, key, key_hash):
+        try:
+            p, position = self.find_lookup_position(key, key_hash)
+            return p, position, False
+        except KeyError:
+            p, position = self.find_insert_position(key, key_hash)
+            return p, position, True
+
+    def find_insert_or_lookup_index(self, key, key_hash):
+        try:
+            p, position = self.find_lookup_position(key, key_hash)
+            table_id = self.tables_id[p - self.p_init]
+            return table_id, position, False
+        except KeyError:
+            p, position = self.find_insert_position(key, key_hash)
+            table_id = self.tables_id[p - self.p_init]
+            return table_id, position, True
+
     def insert(self, data):
         key = data[self.key]
         key_hash = self._hash(key)
 
-        try:
-            p, position = self.find_lookup_position(key, key_hash)
-        except KeyError:
-            p, position = self.find_insert_position(key, key_hash)
+        p, position, _ = self.find_insert_or_lookup_position(
+            key, key_hash)
         table_id = self.tables_id[p - self.p_init]
 
         self.dataset.set(table_id, position, data)
@@ -435,7 +451,7 @@ class FracTable(HashTable):
                 depth += 1
 
 
-class FloatingLayerTable(HashTable):
+class MultiLayerTable(HashTable):
     def __init__(
         self,
         dataset,
@@ -458,7 +474,7 @@ class FloatingLayerTable(HashTable):
 
         self._group_name = f"{dataset.name}_FLT_table"
         self._bloom_filter_name = f"{dataset.name}_FLT_filter"
-        
+
     def _initialize(self):
         self.table = self._db.create_group(
             self._group_name, self.dataset,
@@ -472,7 +488,7 @@ class FloatingLayerTable(HashTable):
             self.cache = LRU(self.cache_len)
 
     def _get_capacity(self, p):
-        capacity = (self.growth_factor**p) -1
+        capacity = (self.growth_factor**p) - 1
         return max(capacity, 1)
 
     def _get_range(self, p, capacity):
@@ -484,7 +500,7 @@ class FloatingLayerTable(HashTable):
         if p is None:
             p = self.p_init
         capacity = self._get_capacity(p)
-        
+
         # allocate new table and new bloom filter
         table_id = self.table.new_block(capacity)
         bloom_id = self._bloom.new_block(
@@ -500,12 +516,12 @@ class FloatingLayerTable(HashTable):
         if self.cache_len > 0:
             self.cache[table_id] = (_prev, p, bloom_id)
         return table_id
-    
+
     def insert(self, table_id, data):
         key = data[self.key]
         _hash = self._hash(key)
         metadata = self._get_metadata(table_id)
-        
+
         # get bloom hash
         _bloom_hash = self._hash(key, seed=self.bloom_seed)
 
@@ -515,7 +531,7 @@ class FloatingLayerTable(HashTable):
         except KeyError:
             t_id, position, capacity, bloom_id, new = self._find_insert_position(
                 table_id, _hash, key, metadata)
-        
+
         self.table[t_id, position] = data
         if True:
             self._insert_in_bloom(bloom_id, capacity, _bloom_hash)
@@ -533,12 +549,12 @@ class FloatingLayerTable(HashTable):
         bloom_capacity = capacity * self.n_bloom_filters
         bucket = _bloom_hash % bloom_capacity
         self._bloom.set_value(bloom_id, bucket, 1)
-    
+
     def _lookup_in_bloom(self, bloom_id, capacity, _bloom_hash):
         bloom_capacity = capacity * self.n_bloom_filters
         bucket = _bloom_hash % bloom_capacity
         return self._bloom.get_value(bloom_id, bucket)
-    
+
     def _get_metadata(self, table_id):
         if self.cache_len > 0:
             metadata = self.cache.get(table_id)
@@ -549,7 +565,7 @@ class FloatingLayerTable(HashTable):
                 return (_prev, p, bloom_id)
             else:
                 return metadata
-        
+
         m = self.table[table_id]
         metadata = m["_prev_table"], m["_p"], m["_bloom_filter"]
         return metadata
@@ -581,7 +597,7 @@ class FloatingLayerTable(HashTable):
                                     False)
             table_id = _prev
             _prev, _, bloom_id = self._get_metadata(table_id)
-            
+
         raise KeyError
 
     def _find_insert_position(self, table_id, _hash, key, metadata):
@@ -602,7 +618,7 @@ class FloatingLayerTable(HashTable):
                             bloom_id,
                             True)
                 else:
-                    # no need to check for equality: 
+                    # no need to check for equality:
                     # it was already been done in lookup phase
                     continue
 

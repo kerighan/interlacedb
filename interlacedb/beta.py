@@ -1,6 +1,5 @@
 import os
 
-
 from .database import InterlaceDB
 
 
@@ -16,7 +15,7 @@ class DataFrame:
             self.header = db.header
             self.write_dataframe(df)
         else:
-            db = InterlaceDB(filename)
+            db = InterlaceDB(filename, flag="r")
             self.data = db.datasets["data"]
             self.header = db.header
             self.start = self.header["start"]
@@ -85,7 +84,7 @@ class Graph:
             node = db.datasets["node"]
             edge = db.datasets["edge"]
         else:
-            from .datastructure import FloatingLayerTable, LayerTable
+            from .datastructure import LayerTable, MultiLayerTable
             with InterlaceDB(filename) as db:
                 node = db.create_dataset(
                     "node",
@@ -99,12 +98,12 @@ class Graph:
                                    probe_factor=.1,
                                    growth_factor=2,
                                    cache_len=cache_len)
-                edges = FloatingLayerTable(edge, key="node",
-                                           n_bloom_filters=50,
-                                           probe_factor=.1,
-                                           p_init=0,
-                                           growth_factor=4,
-                                           cache_len=cache_len)
+                edges = MultiLayerTable(edge, key="node",
+                                        n_bloom_filters=50,
+                                        probe_factor=.1,
+                                        p_init=0,
+                                        growth_factor=4,
+                                        cache_len=cache_len)
                 db.create_datastructure("nodes", nodes)
                 db.create_datastructure("edges", edges)
                 db.create_header(n_nodes="uint64", n_edges="uint64")
@@ -127,7 +126,7 @@ class Graph:
         except KeyError:
             p, position = self.nodes.find_insert_position(u, key_hash)
         table_id = self.nodes.tables_id[p - self.nodes.p_init]
-        
+
         if found:
             return table_id, position
 
@@ -186,11 +185,11 @@ class Graph:
         if new_v_in > v_in_table:
             self._node.set_value(v_t, v_pos, "_in_table", new_v_in)
             self.in_cache[v] = new_v_in
-        
+
         self.header["n_edges"] += 1
 
         self.db.end_transaction()
-    
+
     def neighbors(self, u):
         u_t, u_pos = self.get_node_position(u)
         u_out_table = self._node.get_value(u_t, u_pos, "_out_table")
